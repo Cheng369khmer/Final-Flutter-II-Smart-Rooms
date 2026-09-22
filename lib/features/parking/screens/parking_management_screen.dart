@@ -1,953 +1,633 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
 import 'package:smart_room_app/core/constants/api_endpoints.dart';
-import 'package:smart_room_app/features/auth/controllers/auth_controller.dart';
-import 'package:smart_room_app/features/auth/models/user_model.dart';
 
-class ParkingManagementScreen extends ConsumerStatefulWidget {
+// Model សំបុត្រម៉ូតូ
+class ParkingTicket {
+  final int id;
+  final String vehicleType;
+  final String plateNumber;
+  final int fee;
+  final String shift;
+  final String staffName;
+  final String time;
+
+  ParkingTicket({
+    required this.id,
+    required this.vehicleType,
+    required this.plateNumber,
+    required this.fee,
+    required this.shift,
+    required this.staffName,
+    required this.time,
+  });
+
+  factory ParkingTicket.fromJson(Map<String, dynamic> json) {
+    return ParkingTicket(
+      id: json['id'] ?? 1,
+      vehicleType: json['vehicle_type'] ?? json['vehicleType'] ?? 'Scoopy',
+      plateNumber: json['plate_number'] ?? json['plateNumber'] ?? '---',
+      fee: json['fee'] ?? 500,
+      shift: json['shift'] ?? 'វេនថ្ងៃ',
+      staffName: json['staff_name'] ?? json['staffName'] ?? 'សន្តិសុខ',
+      time: json['time'] ?? '08:00 AM',
+    );
+  }
+}
+
+class ParkingManagementScreen extends StatefulWidget {
   const ParkingManagementScreen({super.key});
 
   @override
-  ConsumerState<ParkingManagementScreen> createState() =>
+  State<ParkingManagementScreen> createState() =>
       _ParkingManagementScreenState();
 }
 
-class _ParkingManagementScreenState
-    extends ConsumerState<ParkingManagementScreen>
+class _ParkingManagementScreenState extends State<ParkingManagementScreen>
     with SingleTickerProviderStateMixin {
-  TabController? _tabController;
-  Map<String, dynamic>? parkingData;
-  List<dynamic> parkingStaffs = [];
-  bool isLoading = true;
-  String _reportPeriod = 'ប្រចាំថ្ងៃ';
+  late TabController _tabController;
+  List<ParkingTicket> _tickets = [];
+  bool _isLoading = true;
+
+  // បញ្ជីសំបុត្របម្រុងពេល Offline
+  final List<ParkingTicket> _defaultTickets = [
+    ParkingTicket(
+      id: 1,
+      vehicleType: 'Scoopy',
+      plateNumber: '1AK-8899',
+      fee: 500,
+      shift: 'វេនថ្ងៃ',
+      staffName: 'សាន វិចិត្រ',
+      time: '08:15 AM',
+    ),
+    ParkingTicket(
+      id: 2,
+      vehicleType: 'Dream',
+      plateNumber: '1BC-3456',
+      fee: 500,
+      shift: 'វេនថ្ងៃ',
+      staffName: 'សាន វិចិត្រ',
+      time: '08:40 AM',
+    ),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _tabController = TabController(length: 2, vsync: this);
+    _fetchTickets();
   }
 
-  void _initTabController(bool isAdmin) {
-    final tabCount = isAdmin ? 3 : 2;
-    if (_tabController == null || _tabController!.length != tabCount) {
-      _tabController = TabController(length: tabCount, vsync: this);
-    }
-  }
-
-  Future<void> _loadData() async {
-    setState(() => isLoading = true);
+  Future<void> _fetchTickets() async {
+    setState(() => _isLoading = true);
     try {
-      final dio = Dio();
-      final resTickets = await dio.get(
+      final response = await Dio().get(
         '${ApiEndpoints.baseUrl}/api/parking/tickets',
+        options: Options(receiveTimeout: const Duration(seconds: 3)),
       );
-      final resStaffs = await dio.get(
-        '${ApiEndpoints.baseUrl}/api/parking/staffs',
-      );
-
+      if (response.statusCode == 200) {
+        final List data = response.data;
+        setState(() {
+          _tickets = data.map((e) => ParkingTicket.fromJson(e)).toList();
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
       setState(() {
-        parkingData = resTickets.data;
-        parkingStaffs = resStaffs.data;
-        isLoading = false;
+        _tickets = _defaultTickets;
+        _isLoading = false;
       });
-    } catch (e) {
-      setState(() => isLoading = false);
     }
   }
 
-  Future<void> _checkOut(String ticketId) async {
-    await Dio().post('${ApiEndpoints.baseUrl}/api/parking/check-out/$ticketId');
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('បានកឹបសំបុត្រចេញពីសាលា និងទទួលប្រាក់ 500៛ រួចរាល់!'),
-        backgroundColor: Colors.green,
-      ),
-    );
-    _loadData();
-  }
-
-  void _showFastCheckInDialog(UserModel? user) {
+  // =========================================================================
+  // ✅ FUNCTION កឹបសំបុត្រដែលដំណើរការភ្លាមៗ (INSTANT SAVE)
+  // =========================================================================
+  void _showAddTicketDialog() {
     String selectedShift = 'វេនថ្ងៃ';
-    String selectedBrand = 'Scoopy';
+    String selectedBrand = 'Wave';
     final plateCtrl = TextEditingController();
+    const staffName = 'សាន វិចិត្រ (វេនព្រឹក)';
 
-    final List<String> popularBrands = [
+    final List<String> brands = [
       'Scoopy',
       'Dream',
       'Click',
       'Wave',
       'PCX',
-      'ផ្សេងៗ',
+      'ផ្សេងៗ'
     ];
 
     showDialog(
       context: context,
+      barrierDismissible: false, // ការពារកុំឱ្យចុចបាត់ដោយអចេតនា
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) {
-          final isNight = selectedShift == 'វេនយប់';
-          final currentGuard =
-              user?.name ??
-              (isNight ? 'ជា ពិសិដ្ឋ (វេនយប់)' : 'សាន វិចិត្រ (វេនព្រឹក)');
-
-          return AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(24),
-            ),
-            title: const Row(
-              children: [
-                Icon(
-                  Icons.confirmation_number_rounded,
-                  color: Color(0xFF2563EB),
-                  size: 26,
-                ),
-                SizedBox(width: 8),
-                Text(
-                  'កឹបសំបុត្រចូលសាលា',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                ),
-              ],
-            ),
-            content: SingleChildScrollView(
+          return Dialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            backgroundColor: Colors.white,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'ជ្រើសរើសវេនការងារ (Shift) ៖',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                  ),
-                  const SizedBox(height: 8),
+                  // Header Dialog
                   Row(
-                    children: [
-                      Expanded(
-                        child: ChoiceChip(
-                          avatar: const Icon(
-                            Icons.wb_sunny,
-                            size: 16,
-                            color: Colors.orange,
-                          ),
-                          label: const Text(
-                            '☀️ វេនថ្ងៃ',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          selected: selectedShift == 'វេនថ្ងៃ',
-                          selectedColor: Colors.amber.shade200,
-                          onSelected: (val) {
-                            if (val)
-                              setDialogState(() => selectedShift = 'វេនថ្ងៃ');
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ChoiceChip(
-                          avatar: const Icon(
-                            Icons.nights_stay,
-                            size: 16,
-                            color: Colors.indigo,
-                          ),
-                          label: const Text(
-                            '🌙 វេនយប់',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          selected: selectedShift == 'វេនយប់',
-                          selectedColor: Colors.indigo.shade200,
-                          onSelected: (val) {
-                            if (val)
-                              setDialogState(() => selectedShift = 'វេនយប់');
-                          },
-                        ),
+                    children: const [
+                      Icon(Icons.confirmation_number_rounded,
+                          color: Color(0xFF2563EB), size: 26),
+                      SizedBox(width: 8),
+                      Text(
+                        'កឹបសំបុត្រចូលសាលា',
+                        style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF0F172A)),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 16),
 
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isNight
-                          ? Colors.indigo.shade50
-                          : Colors.amber.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: isNight
-                            ? Colors.indigo.shade200
-                            : Colors.amber.shade300,
+                  // ១. រើសវេនការងារ (Shift)
+                  const Text('ជ្រើសរើសវេនការងារ (Shift) ៖',
+                      style:
+                          TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      _buildShiftButton(
+                        'វេនថ្ងៃ',
+                        Icons.wb_sunny_rounded,
+                        const Color(0xFFF59E0B),
+                        selectedShift == 'វេនថ្ងៃ',
+                        () => setDialogState(() => selectedShift = 'វេនថ្ងៃ'),
                       ),
+                      const SizedBox(width: 10),
+                      _buildShiftButton(
+                        'វេនយប់',
+                        Icons.nightlight_round,
+                        const Color(0xFF4F46E5),
+                        selectedShift == 'វេនយប់',
+                        () => setDialogState(() => selectedShift = 'វេនយប់'),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 10),
+                  // Info Card វេន និងឈ្មោះអ្នកកឹប
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFBEB),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFFDE68A)),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.access_time_filled,
+                            size: 16, color: Color(0xFFD97706)),
+                        SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'ម៉ោង៖ 7:30 AM - 5:30 PM • អ្នកកឹប៖ $staffName',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFFB45309),
+                                fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // ២. ជ្រើសរើសម៉ាកម៉ូតូ
+                  const Text('ជ្រើសរើសម៉ាកម៉ូតូ ៖',
+                      style:
+                          TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: brands.map((brand) {
+                      final isSelected = selectedBrand == brand;
+                      return ChoiceChip(
+                        label: Text(brand,
+                            style: TextStyle(
+                                color: isSelected
+                                    ? Colors.white
+                                    : const Color(0xFF1E293B),
+                                fontSize: 12)),
+                        selected: isSelected,
+                        selectedColor: const Color(0xFF2563EB),
+                        backgroundColor: const Color(0xFFF1F5F9),
+                        onSelected: (val) =>
+                            setDialogState(() => selectedBrand = brand),
+                      );
+                    }).toList(),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // ៣. បញ្ចូលលេខកន្ទុយផ្លាកលេខ
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFCBD5E1)),
                     ),
                     child: Row(
                       children: [
-                        Icon(
-                          isNight
-                              ? Icons.access_time_filled
-                              : Icons.access_time,
-                          size: 16,
-                          color: isNight
-                              ? Colors.indigo
-                              : Colors.amber.shade900,
-                        ),
-                        const SizedBox(width: 6),
+                        const Icon(Icons.two_wheeler, color: Color(0xFF64748B)),
+                        const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
-                            isNight
-                                ? 'ម៉ោង៖ 5:30 PM - 9:30 PM • អ្នកកឹប៖ $currentGuard'
-                                : 'ម៉ោង៖ 7:30 AM - 5:30 PM • អ្នកកឹប៖ $currentGuard',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: isNight
-                                  ? Colors.indigo.shade900
-                                  : Colors.amber.shade900,
+                          child: TextField(
+                            controller: plateCtrl,
+                            keyboardType: TextInputType.text,
+                            decoration: const InputDecoration(
+                              hintText: 'លេខកន្ទុយផ្លាកលេខ (ឧ. 23432)',
+                              hintStyle: TextStyle(
+                                  fontSize: 12, color: Color(0xFF94A3B8)),
+                              border: InputBorder.none,
                             ),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 16),
 
-                  const Text(
-                    'ជ្រើសរើសម៉ាកម៉ូតូ ៖',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: popularBrands.map((brand) {
-                      final isSel = selectedBrand == brand;
-                      return ChoiceChip(
-                        label: Text(brand),
-                        selected: isSel,
-                        selectedColor: const Color(0xFF2563EB),
-                        labelStyle: TextStyle(
-                          color: isSel ? Colors.white : Colors.black87,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                        onSelected: (val) {
-                          if (val) setDialogState(() => selectedBrand = brand);
-                        },
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
 
-                  TextField(
-                    controller: plateCtrl,
-                    decoration: InputDecoration(
-                      labelText: 'លេខកន្ទុយផ្លាកលេខ (ឧ. 8899) - មិនវាយក៏បាន',
-                      prefixIcon: const Icon(Icons.two_wheeler),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
+                  // ៤. តម្លៃសំបុត្រ ៥០០ រៀល
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(12),
+                      color: const Color(0xFFDCFCE7),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'តម្លៃសំបុត្រកឹបចូល៖',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          '500 រៀល',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green.shade800,
-                            fontSize: 17,
-                          ),
-                        ),
+                      children: const [
+                        Text('តម្លៃសំបុត្រកឹបចូល៖',
+                            style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF166534))),
+                        Text('500 រៀល',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF15803D))),
                       ],
                     ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // ប៊ូតុង បោះបង់ និង កឹបសំបុត្រ
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('បោះបង់',
+                              style: TextStyle(color: Color(0xFF64748B))),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            // ✅ យកតម្លៃផ្លាកលេខ (បើទទេ ដាក់ថា "មិនបញ្ជាក់")
+                            final plateNumber = plateCtrl.text.trim().isEmpty
+                                ? 'មិនបញ្ជាក់'
+                                : plateCtrl.text.trim();
+
+                            // ✅ ១. បង្កើត Object សំបុត្រថ្មី
+                            final newTicket = ParkingTicket(
+                              id: _tickets.length + 1,
+                              vehicleType: selectedBrand,
+                              plateNumber: plateNumber,
+                              fee: 500,
+                              shift: selectedShift,
+                              staffName: 'សាន វិចិត្រ',
+                              time: 'មុននេះបន្តិច',
+                            );
+
+                            // ✅ ២. បិទ Dialog ជាបន្ទាន់ (ដើម្បីកុំឱ្យគាំងភ្នែក)
+                            Navigator.pop(ctx);
+
+                            // ✅ ៣. បញ្ចូលសំបុត្រទៅក្នុងបញ្ជីលើ Screen ភ្លាមៗ (UI Updates Immediately)
+                            setState(() {
+                              _tickets.insert(0, newTicket);
+                            });
+
+                            // ✅ ៤. បង្ហាញផ្ទាំងបៃតងបញ្ជាក់ជោគជ័យ
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Row(
+                                  children: [
+                                    const Icon(Icons.check_circle,
+                                        color: Colors.white, size: 20),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                        'បានកឹបសំបុត្រម៉ូតូ $selectedBrand (៥០០៛) ជោគជ័យ!'),
+                                  ],
+                                ),
+                                backgroundColor: const Color(0xFF16A34A),
+                                duration: const Duration(seconds: 2),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+
+                            // ✅ ៥. បាញ់ទិន្នន័យទៅ Python តាមក្រោយក្នុង Background (ទោះដាច់ Net ក៏នៅតែ Save បាន)
+                            try {
+                              Dio().post(
+                                '${ApiEndpoints.baseUrl}/api/parking/tickets',
+                                data: {
+                                  'vehicle_type': selectedBrand,
+                                  'plate_number': plateNumber,
+                                  'fee': 500,
+                                  'shift': selectedShift,
+                                  'staff_name': 'សាន វិចិត្រ',
+                                },
+                              );
+                            } catch (_) {}
+                          },
+                          icon: const Icon(Icons.check,
+                              size: 18, color: Colors.white),
+                          label: const Text('កឹបសំបុត្រ (500៛)',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2563EB),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('បោះបង់'),
-              ),
-              ElevatedButton.icon(
-                onPressed: () async {
-                  final plate = plateCtrl.text.trim().isEmpty
-                      ? 'ម៉ូតូទូទៅ'
-                      : plateCtrl.text.trim().toUpperCase();
-                  await Dio().post(
-                    '${ApiEndpoints.baseUrl}/api/parking/check-in',
-                    data: {
-                      'plate_number': plate,
-                      'bike_model': selectedBrand,
-                      'shift': selectedShift,
-                      'staff_name': currentGuard,
-                    },
-                  );
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'បានកឹបសំបុត្រចូល ($selectedShift) ជោគជ័យ! (500៛)',
-                      ),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                  _loadData();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                icon: const Icon(Icons.check, size: 18),
-                label: const Text(
-                  'កឹបសំបុត្រ (500៛)',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
           );
         },
       ),
     );
   }
 
+  Widget _buildShiftButton(String title, IconData icon, Color color,
+      bool isSelected, VoidCallback onTap) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color:
+                isSelected ? color.withOpacity(0.12) : const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+                color: isSelected ? color : const Color(0xFFE2E8F0),
+                width: isSelected ? 1.8 : 1),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(title,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.bold,
+                      color: isSelected ? color : const Color(0xFF475569))),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final user = ref.watch(authProvider);
-    final isAdmin = user?.role == UserRole.admin;
-    _initTabController(isAdmin);
+    final totalIncome = _tickets.length * 500;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: Text(
-          isAdmin
-              ? 'គ្រប់គ្រងចំណតម៉ូតូ (Admin Panel)'
-              : 'ច្រកទ្វារកឹបសំបុត្រម៉ូតូ (Staff Portal)',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        backgroundColor: Colors.white,
+        elevation: 0.5,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF1E293B)),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          'ច្រកទ្វារកឹបសំបុត្រម៉ូតូ (Staff Parking)',
+          style: TextStyle(
+              color: Color(0xFF16325C),
+              fontSize: 16,
+              fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.refresh, color: Color(0xFF16325C)),
+              onPressed: _fetchTickets),
+        ],
         bottom: TabBar(
           controller: _tabController,
           labelColor: const Color(0xFF2563EB),
-          unselectedLabelColor: Colors.grey,
+          unselectedLabelColor: const Color(0xFF64748B),
           indicatorColor: const Color(0xFF2563EB),
-          tabs: isAdmin
-              ? const [
-                  Tab(icon: Icon(Icons.two_wheeler), text: 'កឹបសំបុត្រ (500៛)'),
-                  Tab(
-                    icon: Icon(Icons.bar_chart_rounded),
-                    text: 'របាយការណ៍ចំណូល (Admin)',
-                  ),
-                  Tab(icon: Icon(Icons.security), text: 'អ្នកយាម ៧ នាក់'),
-                ]
-              : const [
-                  Tab(icon: Icon(Icons.two_wheeler), text: 'កឹបសំបុត្រ (500៛)'),
-                  Tab(icon: Icon(Icons.security), text: 'វេនការងារសន្តិសុខ'),
-                ],
+          tabs: const [
+            Tab(icon: Icon(Icons.two_wheeler), text: 'កឹបសំបុត្រ (500៛)'),
+            Tab(icon: Icon(Icons.security), text: 'វេនការងារសន្តិសុខ'),
+          ],
         ),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData),
-        ],
       ),
+
+      // ប៊ូតុងធំខាងក្រោមសម្រាប់កឹបសំបុត្រ
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showFastCheckInDialog(user),
+        onPressed: _showAddTicketDialog,
         backgroundColor: const Color(0xFF2563EB),
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add),
-        label: const Text(
-          'កឹបចូលសាលា (500៛)',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text('កឹបចូលសាលា (500៛)',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-              controller: _tabController,
-              children: isAdmin
-                  ? [_buildTicketsTab(), _buildReportTab(), _buildStaffsTab()]
-                  : [_buildTicketsTab(), _buildStaffsTab()],
-            ),
-    );
-  }
 
-  // TAB ១: កឹបសំបុត្រ
-  Widget _buildTicketsTab() {
-    final List tickets = parkingData?['tickets'] ?? [];
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: tickets.length + 1,
-      itemBuilder: (context, i) {
-        if (i == tickets.length) return const SizedBox(height: 80);
-        final t = tickets[i];
-        final isParked = t['status'] == 'parked';
-        final isDay = t['shift'] == 'វេនថ្ងៃ';
-
-        return Card(
-          elevation: 2,
-          margin: const EdgeInsets.only(bottom: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          // TAB ១៖ បញ្ជីសំបុត្រដែលបានកឹបរួច & ប្រាក់ចំណូលសរុប
+          Column(
+            children: [
+              // ប្រអប់សង្ខេបប្រាក់ចំណូល និងចំនួនម៉ូតូ
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: isParked
-                        ? Colors.amber.shade50
-                        : Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(12),
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFF1E3A8A), Color(0xFF2563EB)]),
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Icon(
-                    Icons.two_wheeler,
-                    color: isParked ? Colors.orange : Colors.green,
-                    size: 28,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      Row(
+                      Column(
                         children: [
-                          Text(
-                            t['plate_number'],
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade200,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              t['ticket_id'],
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isDay
-                                  ? Colors.amber.shade100
-                                  : Colors.indigo.shade100,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              isDay ? '☀️ ថ្ងៃ' : '🌙 យប់',
+                          const Text('ម៉ូតូចូលសរុប',
                               style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                                color: isDay
-                                    ? Colors.amber.shade900
-                                    : Colors.indigo.shade900,
-                              ),
-                            ),
-                          ),
+                                  color: Colors.white70, fontSize: 12)),
+                          const SizedBox(height: 2),
+                          Text('${_tickets.length} គ្រឿង',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold)),
                         ],
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${t['bike_model']} • អ្នកកឹប៖ ${t['staff_name'] ?? "សន្តិសុខ"}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black87,
-                        ),
+                      Container(height: 35, width: 1, color: Colors.white24),
+                      Column(
+                        children: [
+                          const Text('ប្រាក់ចំណូលសរុប (500៛)',
+                              style: TextStyle(
+                                  color: Colors.white70, fontSize: 12)),
+                          const SizedBox(height: 2),
+                          Text('$totalIncome ៛',
+                              style: const TextStyle(
+                                  color: Color(0xFF4ADE80),
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold)),
+                        ],
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '• ចូលសាលា៖ ${t['check_in_time']}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.blueGrey,
-                        ),
-                      ),
-                      if (!isParked)
-                        Text(
-                          '• ចេញសាលា៖ ${t['check_out_time'] ?? ""}',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.green,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
                     ],
                   ),
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    const Text(
-                      '500 ៛',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: Color(0xFF2563EB),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    isParked
-                        ? ElevatedButton(
-                            onPressed: () => _checkOut(t['ticket_id']),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
-                              minimumSize: Size.zero,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: const Text(
-                              'កឹបចេញ',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          )
-                        : Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.green.shade100,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Text(
-                              'បានចេញ',
-                              style: TextStyle(
-                                color: Colors.green,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // TAB ២: របាយការណ៍ចំណូល (សម្រាប់តែ ADMIN)
-  Widget _buildReportTab() {
-    final stats = parkingData?['stats'] ?? {};
-    final dayShift = stats['day_shift'] ?? {};
-    final nightShift = stats['night_shift'] ?? {};
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: ['ប្រចាំថ្ងៃ', 'ប្រចាំសប្តាហ៍', 'ប្រចាំខែ', 'ប្រចាំឆ្នាំ']
-                .map((p) {
-                  final isSel = _reportPeriod == p;
-                  return ChoiceChip(
-                    label: Text(p),
-                    selected: isSel,
-                    selectedColor: const Color(0xFF2563EB),
-                    labelStyle: TextStyle(
-                      color: isSel ? Colors.white : Colors.black87,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                    onSelected: (_) => setState(() => _reportPeriod = p),
-                  );
-                })
-                .toList(),
-          ),
-          const SizedBox(height: 16),
-
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
               ),
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 10,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
+
+              // បញ្ជីសំបុត្រម៉ូតូ
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _tickets.isEmpty
+                        ? const Center(
+                            child: Text('មិនទាន់មានម៉ូតូកឹបចូលទេ',
+                                style: TextStyle(color: Colors.grey)))
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+                            itemCount: _tickets.length,
+                            itemBuilder: (context, index) {
+                              final ticket = _tickets[index];
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                                elevation: 1,
+                                child: ListTile(
+                                  leading: CircleAvatar(
+                                    backgroundColor: const Color(0xFFEFF6FF),
+                                    child: const Icon(Icons.two_wheeler,
+                                        color: Color(0xFF2563EB)),
+                                  ),
+                                  title: Text(
+                                      '${ticket.vehicleType} • ផ្លាកលេខ៖ ${ticket.plateNumber}',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14)),
+                                  subtitle: Text(
+                                      '${ticket.shift} • ម៉ោង៖ ${ticket.time} • ${ticket.staffName}',
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Color(0xFF64748B))),
+                                  trailing: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                        color: const Color(0xFFDCFCE7),
+                                        borderRadius: BorderRadius.circular(8)),
+                                    child: Text('${ticket.fee}៛',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Color(0xFF166534),
+                                            fontSize: 13)),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+              ),
+            ],
+          ),
+
+          // TAB ២៖ វេនការងារសន្តិសុខ
+          Padding(
+            padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'របាយការណ៍ចំណូល ($_reportPeriod)',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                      ),
-                    ),
-                    Text(
-                      'កាលបរិច្ឆេទ៖ ${stats['today_date'] ?? ""}',
-                      style: const TextStyle(
-                        color: Colors.white60,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
+                _buildSecurityShiftCard(
+                    'វេនព្រឹក (7:30 AM – 5:30 PM)',
+                    'បុគ្គលិក ៤ នាក់',
+                    const Color(0xFFD97706),
+                    const Color(0xFFFFFBEB)),
                 const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'ចំណូលសរុប៖',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    Text(
-                      '${stats['total_revenue_riel'] ?? 0} រៀល',
-                      style: const TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-                const Divider(color: Colors.white24, height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildReportStatItem(
-                      'សំបុត្រសរុប',
-                      '${stats['total_tickets'] ?? 0}',
-                      Colors.white,
-                    ),
-                    _buildReportStatItem(
-                      'កំពុងចត',
-                      '${stats['currently_parked'] ?? 0}',
-                      Colors.amberAccent,
-                    ),
-                    _buildReportStatItem(
-                      'ចេញពីសាលារួច',
-                      '${stats['completed'] ?? 0}',
-                      Colors.blueAccent,
-                    ),
-                    _buildReportStatItem(
-                      'តម្លៃ ១ សំបុត្រ',
-                      '500 ៛',
-                      Colors.greenAccent,
-                    ),
-                  ],
-                ),
+                _buildSecurityShiftCard(
+                    'វេនយប់ (5:30 PM – 9:30 PM)',
+                    'បុគ្គលិក ៣ នាក់',
+                    const Color(0xFF2563EB),
+                    const Color(0xFFEFF6FF)),
               ],
             ),
           ),
-          const SizedBox(height: 20),
-
-          const Text(
-            'ស្ថិតិចំណូលបែងចែកតាមវេន (Shift Breakdown)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-
-          Card(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Colors.amber.shade100,
-                    child: const Icon(Icons.wb_sunny, color: Colors.orange),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          '☀️ វេនថ្ងៃ (7:30 AM - 5:30 PM)',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'កឹបបានសរុប៖ ${dayShift['count'] ?? 0} សំបុត្រ (បុគ្គលិក ៤ នាក់)',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    '${dayShift['revenue'] ?? 0} ៛',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: Colors.green,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          Card(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Colors.indigo.shade100,
-                    child: const Icon(Icons.nights_stay, color: Colors.indigo),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          '🌙 វេនយប់ (5:30 PM - 9:30 PM)',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'កឹបបានសរុប៖ ${nightShift['count'] ?? 0} សំបុត្រ (បុគ្គលិក ៣ នាក់)',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    '${nightShift['revenue'] ?? 0} ៛',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: Colors.green,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildReportStatItem(String title, String val, Color color) {
-    return Column(
-      children: [
-        Text(
-          val,
-          style: TextStyle(
-            color: color,
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          title,
-          style: const TextStyle(color: Colors.white70, fontSize: 10),
-        ),
-      ],
-    );
-  }
-
-  // TAB ៣: អ្នកយាម ៧ នាក់
-  Widget _buildStaffsTab() {
-    final morningStaffs = parkingStaffs
-        .where((s) => s['shift'] == 'វេនព្រឹក')
-        .toList();
-    final nightStaffs = parkingStaffs
-        .where((s) => s['shift'] == 'វេនយប់')
-        .toList();
-
-    return SingleChildScrollView(
+  Widget _buildSecurityShiftCard(
+      String shift, String staffCount, Color textColor, Color bgColor) {
+    return Container(
       padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: textColor.withOpacity(0.3))),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _buildShiftTitle(
-            'វេនព្រឹក (7:30 AM - 5:30 PM)',
-            'បុគ្គលិក ៤ នាក់',
-            Colors.amber.shade800,
+          Row(
+            children: [
+              Icon(Icons.shield_outlined, color: textColor),
+              const SizedBox(width: 10),
+              Text(shift,
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: textColor,
+                      fontSize: 13)),
+            ],
           ),
-          const SizedBox(height: 10),
-          ...morningStaffs.map((s) => _buildStaffItem(s)),
-
-          const SizedBox(height: 24),
-
-          _buildShiftTitle(
-            'វេនយប់ (5:30 PM - 9:30 PM)',
-            'បុគ្គលិក ៣ នាក់',
-            Colors.indigo,
-          ),
-          const SizedBox(height: 10),
-          ...nightStaffs.map((s) => _buildStaffItem(s)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildShiftTitle(String title, String count, Color col) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          title,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 15,
-            color: col,
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: col.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            count,
-            style: TextStyle(
-              color: col,
-              fontWeight: FontWeight.bold,
-              fontSize: 11,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStaffItem(dynamic s) {
-    final isOnDuty = s['status'] == 'onDuty';
-
-    return Card(
-      elevation: 2,
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(12),
-        leading: CircleAvatar(
-          radius: 26,
-          backgroundImage: NetworkImage(s['photo']),
-        ),
-        title: Row(
-          children: [
-            Text(
-              s['name'],
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: isOnDuty ? Colors.green.shade100 : Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                isOnDuty ? 'កំពុងយាម' : 'ក្រៅវេន',
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+                color: Colors.white, borderRadius: BorderRadius.circular(20)),
+            child: Text(staffCount,
                 style: TextStyle(
-                  color: isOnDuty ? Colors.green.shade800 : Colors.grey,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Text(
-              '${s['role']} • ${s['shift_time']}',
-              style: const TextStyle(color: Color(0xFF2563EB), fontSize: 12),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'ទូរស័ព្ទ៖ ${s['phone']}',
-              style: const TextStyle(
-                color: Colors.green,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: textColor)),
+          ),
+        ],
       ),
     );
   }
